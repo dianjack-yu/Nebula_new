@@ -1,5 +1,11 @@
 nebula changelog
 
+1.1.0 (2026-07-24 by Dian Yu)
+  - Add variable phonon domain
+  - Add variable initial material
+  - Add escape depth and event ID
+  - Prescan speedup
+
 1.0.3 (WIP)
   - (No real code change) Drop support for C++11 and CUDA <9.2; add support for modern versions of CUDA.
 
