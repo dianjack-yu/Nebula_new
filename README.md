@@ -111,6 +111,10 @@ The event ID is the type of the last event an electron underwent:
 The default physics (`physics_config.h`) uses the Penn inelastic model. With the Kieft & Bosch inelastic model,
 secondary electrons inherit the event ID of the event that created them (4 or 42).
 
+In the event files of `nebula_cpu_all_events`, every particle starts with a zero-length row at its starting point.
+Secondaries get two: one with their creation event ID (21, 22, 41) when they are created, and one with event ID 0
+when their own simulation starts. Event ID 0 therefore marks the start of every particle, not only of primaries.
+
 ### Lineage tags
 
     0:   Primary (moving with dir.z <= 0 since creation)
@@ -126,6 +130,8 @@ Reflection at an interface does not change a primary into a BSE.
 
 ### Processing scripts
 
-Example Python scripts for generating the pri files and processing the event files will be included in the `script_examples` folder.
-Consult other sources for more details on how to set up the Python environment if needed.
+The `script_examples` folder contains example Python and shell scripts to get started (see its README):
+generating geometries and primary electron files, running a complete liquid-cell workflow, and analysing
+yields, escape depths (`origin_z`), angular distributions, SEM images and electron trajectories.
+They need Python 3 with numpy and matplotlib.
 Feel free to develop your own processing scripts based on the new capabilities.
