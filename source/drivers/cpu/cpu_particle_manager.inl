@@ -19,10 +19,10 @@ void cpu_particle_manager<material_manager_t>::destroy(
 	manager.cascades.clear();
 }
 
-template<typename material_manager_t>
+template<typename material_manager_t> //Dian Yu: added initial_material parameter
 auto cpu_particle_manager<material_manager_t>::push(
-	particle* primary_particles, primary_tag_t* tags, particle_index_t N)
--> particle_index_t
+	particle* primary_particles, primary_tag_t* tags, particle_index_t N, material_index_t initial_material)
+	-> particle_index_t
 {
 	particles.reserve(particles.size() + N);
 	for (particle_index_t i = 0; i < N; ++i)
@@ -30,7 +30,7 @@ auto cpu_particle_manager<material_manager_t>::push(
 		particles.push_back({
 			NO_EVENT,
 			0,
-			-123,  // TODO: vacuum
+			initial_material,  // Dian Yu: variable initial material
 			primary_particles[i],
 			tags[i],
 			0,

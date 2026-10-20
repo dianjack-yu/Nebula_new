@@ -7,12 +7,13 @@ cpu_material_manager<material_t>::~cpu_material_manager()
 		material_t::destroy(mat);
 }
 
+// Dian Yu: variable phonon domain
 template<typename material_t>
-void cpu_material_manager<material_t>::add(hdf5_file const & mat)
+void cpu_material_manager<material_t>::add(hdf5_file const & mat, real phonon_domain)
 {
 	if (_materials.size() == std::numeric_limits<material_index_t>::max())
 		throw std::runtime_error("Too many materials submitted");
-	_materials.push_back(material_t::create(mat));
+	_materials.push_back(material_t::create(mat, phonon_domain));
 }
 
 template<typename material_t>

@@ -20,39 +20,35 @@ struct material<scatter_list<scatter_types...>>
 {
 public:
 	using base_t = scatter_list<scatter_types...>;
-
+	
 	/**
-	 * \brief Read from a HDF5 material file.
-	 *
-	 * Under the hood, this calls the create() function for each of the
-	 * \p scatter_types that are part of this material.
+	 * \brief Dian Yu: Read from a HDF5 material file with default phonon domain.
 	 *
 	 * \param mat HDF5 file with the data
 	 */
 	static CPU material create(nbl::hdf5_file const & mat);
-
+	
+	/**
+	 * \brief Dian Yu: Read from a HDF5 material file with custom phonon domain.
+	 *
+	 * \param mat HDF5 file with the data
+	 * \param phonon_domain Energy threshold for phonon scattering (eV)
+	 */
+	static CPU material create(nbl::hdf5_file const & mat, real phonon_domain);
+	
 	/**
 	 * \brief Clone from a different material.
-	 *
-	 * The "source" material may have a different list of scattering types, as
-	 * long as they are convertible. This happens, for example, when cloning
-	 * a CPU material to a GPU.
-	 *
-	 * \param source Material class with data to clone
 	 */
 	template<typename... source_scatter_types>
 	static CPU material create(material<scatter_list<source_scatter_types...>> const & source);
-
+	
 	/**
 	 * \brief Deallocate all data
 	 */
 	static CPU void destroy(material & mat);
-
+	
 	/**
 	 * \brief Barrier energy, that is, the work function plus the Fermi energy.
-	 *
-	 * An electron cannot escape the material unless it has more kinetic energy
-	 * than this value.
 	 */
 	real barrier = 0;
 };

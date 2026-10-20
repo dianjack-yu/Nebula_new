@@ -89,16 +89,26 @@ public:
 
 		// determine the scattered direction
 		this_particle.dir = this_particle.dir * cos_theta + normal_dir * sin_theta;
-
+		this_particle.event_id_int = 1; // Dian Yu: record elastic scattering event of electron
+        
+		// Dian Yu: BSE tagging: primary electron direction reversal
+        if (this_particle.tag_lineage == 0 && this_particle.dir.z > 0)
+        {
+            this_particle.tag_lineage = 1;
+			this_particle.origin_z = this_particle.pos.z; //Dian Yu: record turnaround position for BSE
+        }
 		// special cases for phonon scattering and atom recoil energy loss.
 		// the energy domain for phonon scattering is exactly the same as in the
 		//   original Kieft & Bosch code.
 		// the amount of energy loss for phonons can be found in the thesis of T.V. Eq. 3.116.
-		// TODO: set variable domain for phonon scattering
-		if (this_particle.kin_energy < 200)
+		// Dian Yu: set variable domain for phonon scattering, default = 200 eV
+		if (this_particle.kin_energy < _phonon_domain)
 		{
 			if (acoustic_phonon_loss)
+			{
 				this_particle.kin_energy -= minr(50e-3f, _phonon_loss);
+                this_particle.event_id_int = 11; // Dian Yu: record acoustic phonon loss event of electron
+			}
 		}
 		else
 		{
@@ -107,6 +117,7 @@ public:
 			if (atomic_recoil_loss)
 			{
 				this_particle.kin_energy -= _recoil_const*(1 - cos_theta) * this_particle.kin_energy;
+                this_particle.event_id_int = 12; // Dian Yu: record atomic recoil event of electron
 			}
 		}
 
@@ -117,7 +128,7 @@ public:
 	/**
 	 * \brief Create, given a material file
 	 */
-	static CPU kieft_elastic create(hdf5_file const & mat)
+	static CPU kieft_elastic create(hdf5_file const & mat, real phonon_domain = 200) //Dian Yu: variable phonon domain
 	{
 		if (!mat.exists("/kieft/elastic"))
 			throw std::runtime_error("Kieft elastic model not found in "
@@ -161,7 +172,7 @@ public:
 		el._recoil_const = 2 * static_cast<real>(
 			2 * (9.109383e-28 * units::g) // 2 * (electron mass)
 			/ mat.get_property_quantity("effective_A"));
-
+		el._phonon_domain = phonon_domain;  // Dian Yu: Set phonon domain
 		return el;
 	}
 
@@ -175,6 +186,7 @@ public:
 
 		target._phonon_loss = source._phonon_loss;
 		target._recoil_const = source._recoil_const;
+		target._phonon_domain = source._phonon_domain;  // Dian Yu: Copy phonon domain
 
 		target._log_imfp_table = util::table_1D<real, gpu_flag>::create(source._log_imfp_table);
 		target._icdf_table = util::table_2D<real, gpu_flag>::create(source._icdf_table);
@@ -214,6 +226,7 @@ private:
 
 	real _phonon_loss;  ///< Amount of energy lost in a phonon event (eV)
 	real _recoil_const; ///< Amount of energy lost in a Mott event (eV)
+	real _phonon_domain; ///< Dian Yu: Upper threshold for phonon scattering domain (eV)
 
 	template<bool, bool, bool>
 	friend class kieft_elastic;

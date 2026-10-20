@@ -15,6 +15,7 @@
 
 #include <iostream>
 #include <iomanip>
+#include <sstream>
 #include <chrono>
 #include <algorithm>
 #include <numeric>
@@ -31,15 +32,16 @@ using driver = nbl::drivers::energydeposit_cpu_driver<
 	geometry_t
 >;
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
 	// Print version information
-	std::clog << "This is Nebula version "
-		<< VERSION_MAJOR << "." << VERSION_MINOR << "." << VERSION_PATCH << "\n\n"
-		"Physics models:\n";
+	std::clog << "This is Nebula Energy Deposition 32-bit version "
+			  << VERSION_MAJOR << "." << VERSION_MINOR << "." << VERSION_PATCH << "\n\n"
+																				  "Physics models:\n";
 	scatter_physics<false>::print_info(std::clog);
 	intersect_t::print_info(std::clog);
-	std::clog << "\n" << std::string(80, '-') << "\n\n";
+	std::clog << "\n"
+			  << std::string(80, '-') << "\n\n";
 
 	// Settings
 	cli_params p("[options] <geometry.tri> <primaries.pri> [material0.mat] .. [materialN.mat]");
@@ -47,11 +49,20 @@ int main(int argc, char** argv)
 	p.add_option("seed", "Random seed", 0x78c7e39b);
 	p.add_option("detect-filename", "Filename for detected electrons", "detected.bin");
 	p.add_option("deposit-filename", "Filename for energy deposits", "stdout");
+	// Dian Yu: Variable phonon domain, skip all or specify one for each material
+	p.add_multi_option("phonon-domain", "Phonon scattering energy domains per material (eV)", std::string(""));
+	//Dian Yu: for variable starting material, vacuum by default
+	p.add_option("initial-material", "Material index where primaries start (-123=vacuum, -126=detector, >=0=material)", -123);
+
 	p.parse(argc, argv);
 	const real energy_threshold = p.get_flag<real>("energy-threshold");
 	const unsigned int seed = p.get_flag<unsigned int>("seed");
 	const std::string detect_filename = p.get_flag<std::string>("detect-filename");
 	const std::string deposit_filename = p.get_flag<std::string>("deposit-filename");
+	// Dian Yu: fetch initial material
+	const int initial_material = p.get_flag<int>("initial-material");
+	// Dian Yu: Parse phonon domains, fetch as a vector
+	std::vector<real> phonon_domains = p.get_flag_vector<real>("phonon-domain");
 
 
 	// Setup time logging
@@ -82,7 +93,7 @@ int main(int argc, char** argv)
 	// Sanity check with number of materials
 	{
 		int max_material = -1;
-		for (triangle const & tri : triangles)
+		for (triangle const &tri : triangles)
 		{
 			if (tri.material_in > max_material)
 				max_material = tri.material_in;
@@ -90,16 +101,18 @@ int main(int argc, char** argv)
 				max_material = tri.material_out;
 		}
 
-		if (max_material > int(pos_flags.size())-3)
+		if (max_material > int(pos_flags.size()) - 3)
 		{
 			std::clog << "Error: not enough materials provided for this geometry!\n"
-				"  Expected " << (max_material+1) << " materials, " << (pos_flags.size()-2) << " provided.\n";
+						 "  Expected "
+					  << (max_material + 1) << " materials, " << (pos_flags.size() - 2) << " provided.\n";
 			return 1;
 		}
-		if (max_material < int(pos_flags.size())-3)
+		if (max_material < int(pos_flags.size()) - 3)
 		{
 			std::clog << "Warning: too many materials provided for this geometry!\n"
-				"  Expected " << (max_material+1) << " materials, " << (pos_flags.size()-2) << " provided.\n";
+						 "  Expected "
+					  << (max_material + 1) << " materials, " << (pos_flags.size() - 2) << " provided.\n";
 		}
 	}
 
@@ -115,11 +128,19 @@ int main(int argc, char** argv)
 	for (size_t parameter_idx = 2; parameter_idx < pos_flags.size(); ++parameter_idx)
 	{
 		nbl::hdf5_file material(pos_flags[parameter_idx]);
-		materials.add(material);
+		
+		// Dian Yu: Get phonon domain for this material (default 200 eV if not specified)
+		size_t mat_idx = parameter_idx - 2;
+		real phonon_domain = 200.0;  // default
+		if (mat_idx < phonon_domains.size()) // && phonon_domains[mat_idx] > 0
+			phonon_domain = phonon_domains[mat_idx];
+		
+		materials.add(material, phonon_domain);  // Dian Yu: Pass phonon domain
 
-		std::clog << "  Material " << (parameter_idx - 2) << ":\n"
-			"    Name: " << material.get_property_string("name") << "\n"
-			"    cstool version: " << material.get_property_string("cstool_version") << "\n";
+		std::clog << "  Material " << mat_idx << ":\n"
+				  << "    Name: " << material.get_property_string("name") << "\n"
+				  << "    cstool version: " << material.get_property_string("cstool_version") << "\n"
+				  << "    Phonon domain: " << phonon_domain << " eV\n";  // Dian Yu: Print phonon domain
 	}
 	timer.stop("Loading materials");
 
@@ -127,7 +148,8 @@ int main(int argc, char** argv)
 	// Load primaries
 	std::clog << "Loading primary electrons..." << std::endl;
 	timer.start();
-	std::vector<particle> primaries; std::vector<int2> pixels;
+	std::vector<particle> primaries;
+	std::vector<int2> pixels;
 	std::tie(primaries, pixels) = nbl::load_pri_file(pos_flags[1], geometry.AABB_min(), geometry.AABB_max(), materials.get_max_energy());
 	timer.stop("Loading primary electrons");
 
@@ -151,11 +173,12 @@ int main(int argc, char** argv)
 
 	// Print debug data
 	std::clog << "\n"
-		<< "Loaded " << triangles.size() << " triangles.\n"
-		<< "  min = {" << geometry.AABB_min().x << ", " << geometry.AABB_min().y << ", " << geometry.AABB_min().z << "}\n"
-		<< "  max = {" << geometry.AABB_max().x << ", " << geometry.AABB_max().y << ", " << geometry.AABB_max().z << "}\n"
-		<< "Loaded " << primaries.size() << " primaries.\n"
-		<< "Loaded " << materials.size() << " materials.\n\n" << std::flush;
+			  << "Loaded " << triangles.size() << " triangles.\n"
+			  << "  min = {" << geometry.AABB_min().x << ", " << geometry.AABB_min().y << ", " << geometry.AABB_min().z << "}\n"
+			  << "  max = {" << geometry.AABB_max().x << ", " << geometry.AABB_max().y << ", " << geometry.AABB_max().z << "}\n"
+			  << "Loaded " << primaries.size() << " primaries.\n"
+			  << "Loaded " << materials.size() << " materials.\n\n"
+			  << std::flush;
 
 	// Prepare output file
 	output_stream detect_out(detect_filename);
@@ -163,15 +186,15 @@ int main(int argc, char** argv)
 
 	// Simulation loop
 	auto sim_loop = [&pool, &detect_out, &deposit_out, &pixels,
-			&geometry, &inter, &materials, energy_threshold](uint32_t seed)
-	{
+		&geometry, &inter, &materials, energy_threshold, initial_material](uint32_t seed) // Dian Yu: pass initial material
+		{
 		driver d(
 			inter, materials, geometry,
-			energy_threshold, materials.get_max_energy(), seed);
+			energy_threshold, materials.get_max_energy(), seed, initial_material); // Dian Yu: pass initial material
 		output_buffer detect_buff(detect_out,
-			1024*(7*sizeof(float) + 2*sizeof(int)));
+								  1024 * (8 * sizeof(float) + 3 * sizeof(int))); // Jonathan Choi & Dian Yu edit
 		output_buffer deposit_buff(deposit_out,
-			1024*1024*(5*sizeof(float) + 2*sizeof(int)));
+								   1024 * 1024 * (5 * sizeof(float) + 4 * sizeof(int))); // Jonathan Choi & Dian Yu edit
 
 		for (;;)
 		{
@@ -182,29 +205,29 @@ int main(int argc, char** argv)
 				break;
 
 			d.push(
-				std::get<0>(work_data),  // particle*
-				std::get<1>(work_data),  // tag*
+				std::get<0>(work_data),	 // particle*
+				std::get<1>(work_data),	 // tag*
 				std::get<2>(work_data)); // number
 
 			// Simulate a little, output deposition data
-			d.simulate_to_end([&deposit_buff, &pixels](particle const & before, particle const & after, uint32_t tag)
-			{
+			d.simulate_to_end([&deposit_buff, &pixels](particle const &before, particle const &after, uint32_t tag)
+							  {
 				deposit_buff.add(std::array<float, 5>{
 					after.pos.x, after.pos.y, after.pos.z,
 					before.kin_energy, before.kin_energy - after.kin_energy});
-				deposit_buff.add(std::array<int, 2>{
-					pixels[tag].x, pixels[tag].y});
-			});
+				deposit_buff.add(std::array<int, 4>{ // Jonathan Choi & Dian Yu edit
+					pixels[tag].x, pixels[tag].y, after.tag_lineage,
+				    after.event_id_int}); }); // Jonathan Choi & Dian Yu edit
 
 			// Flush output data
-			d.flush_detected([&detect_buff, &pixels](particle const & p, uint32_t t)
-			{
-				detect_buff.add(std::array<float, 7>{
+			d.flush_detected([&detect_buff, &pixels](particle const &p, uint32_t t)
+							 {
+				detect_buff.add(std::array<float, 8>{
 					p.pos.x, p.pos.y, p.pos.z,
-					p.dir.x, p.dir.y, p.dir.z, p.kin_energy});
-				detect_buff.add(std::array<int, 2>{
-					pixels[t].x, pixels[t].y});
-			});
+					p.dir.x, p.dir.y, p.dir.z, p.kin_energy,
+				    p.origin_z}); // Jonathan Choi & Dian Yu edit
+				detect_buff.add(std::array<int, 3>{ 
+					pixels[t].x, pixels[t].y, p.tag_lineage}); }); // Jonathan Choi & Dian Yu edit, no p.event_id_int
 		}
 
 		detect_buff.flush();
@@ -226,12 +249,12 @@ int main(int argc, char** argv)
 		std::this_thread::sleep_for(std::chrono::seconds(1));
 		auto primaries_to_go = pool.get_primaries_to_go();
 		std::clog << " \rProgress "
-			<< std::fixed << std::setprecision(2) << 100 * (1 - ((double)primaries_to_go / primaries.size())) << "%";
+				  << std::fixed << std::setprecision(2) << 100 * (1 - ((double)primaries_to_go / primaries.size())) << "%";
 		if (primaries_to_go == 0)
 			break;
 	}
 
-	for (auto& t : threads)
+	for (auto &t : threads)
 		t.join();
 
 	timer.stop("Simulation");

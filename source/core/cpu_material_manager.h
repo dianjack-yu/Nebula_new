@@ -24,7 +24,7 @@ public:
 	 *
 	 * \param mat The HDF5 file to load the data from
 	 */
-	void add(hdf5_file const & mat);
+	void add(hdf5_file const & mat, real phonon_domain = 200); // Dian Yu: Variable phonon domain
 
 	/**
 	 * \brief Get the number of materials.

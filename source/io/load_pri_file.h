@@ -7,26 +7,32 @@
 #include "../core/particle.h"
 
 #if !CUDA_HEADERS_AVAILABLE
-struct int2 { int x, y; };
+struct int2
+{
+	int x, y;
+};
 #endif
 
-namespace nbl {
+namespace nbl
+{
 
 	/**
 	 * \brief Load primary electrons file.
 	 *
-	 * This is a binary file, where each electron is stored as 7 floats and 2 ints.
+	 * This is a binary file, where each electron is stored as 8 floats and 4 ints.
 	 * The values are
 	 *  - The position x,y,z in nm
 	 *  - Direction vector x,y,z (unnormalised)
 	 *  - Energy in eV
+	 *  - Origin z position (escape depth) (Dian Yu)
 	 *  - Pixel indices x and y
-	 *
+	 *  - Lineage tag (Jonathan Choi; ignored, primaries start at 0)
+	 *  - Event ID (Dian Yu; ignored, primaries start at 0; see README)
 	 * \return A vector of the particle data,
 	 *         and a corresponding vector of pixel indices.
 	 */
 	std::pair<std::vector<particle>, std::vector<int2>> load_pri_file(
-		std::string const & filename,
+		std::string const &filename,
 		vec3 min_pos,
 		vec3 max_pos, real max_E);
 
@@ -40,8 +46,8 @@ namespace nbl {
 	 * partially sorted.
 	 */
 	void sort_pri_file(
-		std::vector<particle>& particle_vec,
-		std::vector<int2>& pixel_vec);
+		std::vector<particle> &particle_vec,
+		std::vector<int2> &pixel_vec);
 
 	/**
 	 * \brief Shuffle the primary particles such that the first `prescan_size`
@@ -50,8 +56,8 @@ namespace nbl {
 	 * The others are left mostly untouched.
 	 */
 	void prescan_shuffle(
-		std::vector<particle>& particle_vec,
-		std::vector<int2>& pixel_vec,
+		std::vector<particle> &particle_vec,
+		std::vector<int2> &pixel_vec,
 		size_t prescan_size);
 
 } // namespace nbl

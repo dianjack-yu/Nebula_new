@@ -31,8 +31,10 @@ public:
 		material_manager_t const & materials,
 		geometry_manager_t const & geometry,
 		real min_energy, real max_energy,
-		seed_t seed = util::random_generator<false>::default_seed)
-	: base_t(intersect, materials, geometry, min_energy, max_energy, seed)
+		seed_t seed = util::random_generator<false>::default_seed,
+		int initial_material = -123) //Dian Yu: default initial material
+
+	: base_t(intersect, materials, geometry, min_energy, max_energy, seed, initial_material)
 	{}
 
 	/// Perform a single iteration of the simulation for all particles.

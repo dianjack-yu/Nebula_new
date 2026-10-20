@@ -16,3 +16,8 @@ add_executable(nebula_cpu_edep cpu_energydep.cpp
 		$<TARGET_OBJECTS:octree>)
 target_link_libraries(nebula_cpu_mt ${LIBRARIES} Threads::Threads)
 target_link_libraries(nebula_cpu_edep ${LIBRARIES} Threads::Threads)
+
+add_executable(nebula_cpu_all_events cpu_all_events.cpp
+		$<TARGET_OBJECTS:io>
+		$<TARGET_OBJECTS:octree>)
+target_link_libraries(nebula_cpu_all_events ${LIBRARIES} Threads::Threads)

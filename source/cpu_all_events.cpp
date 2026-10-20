@@ -47,9 +47,9 @@ int main(int argc, char **argv)
 	p.add_option("seed", "Random seed", 0x78c7e39b);
 	p.add_option("detect-filename", "Filename for detected electrons", "detected.bin");
 	p.add_option("events-filename", "Filename for event records", "stdout");
-	// Jack Yu: Variable phonon domain, skip all or specify one for each material
+	// Dian Yu: Variable phonon domain, skip all or specify one for each material
 	p.add_multi_option("phonon-domain", "Phonon scattering energy domains per material (eV)", std::string(""));
-	//Jack Yu: for variable starting material, vacuum by default
+	//Dian Yu: for variable starting material, vacuum by default
 	p.add_option("initial-material", "Material index where primaries start (-123=vacuum, -126=detector, >=0=material)", -123);
 
 	p.parse(argc, argv);
@@ -58,9 +58,9 @@ int main(int argc, char **argv)
 	const unsigned int seed = p.get_flag<unsigned int>("seed");
 	const std::string detect_filename = p.get_flag<std::string>("detect-filename");
 	const std::string events_filename = p.get_flag<std::string>("events-filename");
-	// Jack Yu: fetch initial material
+	// Dian Yu: fetch initial material
 	const int initial_material = p.get_flag<int>("initial-material");
-	// Jack Yu: Parse phonon domains, fetch as a vector
+	// Dian Yu: Parse phonon domains, fetch as a vector
 	std::vector<real> phonon_domains = p.get_flag_vector<real>("phonon-domain");
 
 
@@ -126,18 +126,18 @@ int main(int argc, char **argv)
 	{
 		nbl::hdf5_file material(pos_flags[parameter_idx]);
 		
-		// Jack Yu: Get phonon domain threshold for this material (default 200 eV if not specified)
+		// Dian Yu: Get phonon domain threshold for this material (default 200 eV if not specified)
 		size_t mat_idx = parameter_idx - 2;
 		real phonon_domain = (mat_idx < phonon_domains.size()) //  && phonon_domains[mat_idx] > 0
 							? phonon_domains[mat_idx] 
 							: 200.0;
 		
-		materials.add(material, phonon_domain);  // Jack Yu: Pass phonon domain
+		materials.add(material, phonon_domain);  // Dian Yu: Pass phonon domain
 
 		std::clog << "  Material " << mat_idx << ":\n"
 			"    Name: " << material.get_property_string("name") << "\n"
 			"    cstool version: " << material.get_property_string("cstool_version") << "\n"
-			"    Phonon domain: " << phonon_domain << " eV\n";  // Jack Yu: Print phonon domain
+			"    Phonon domain: " << phonon_domain << " eV\n";  // Dian Yu: Print phonon domain
 	}
 	timer.stop("Loading materials");
 
@@ -181,15 +181,15 @@ int main(int argc, char **argv)
 
 	// Simulation loop
 	auto sim_loop = [&pool, &detect_out, &events_out, &pixels,
-		&geometry, &inter, &materials, energy_threshold, initial_material](uint32_t seed) // Jack Yu: pass initial material
+		&geometry, &inter, &materials, energy_threshold, initial_material](uint32_t seed) // Dian Yu: pass initial material
 		{
 		driver d(
 			inter, materials, geometry,
-			energy_threshold, materials.get_max_energy(), seed, initial_material); //Jack Yu: pass initial material
+			energy_threshold, materials.get_max_energy(), seed, initial_material); //Dian Yu: pass initial material
 		output_buffer detect_buff(detect_out,
-			1024*(8*sizeof(float) + 3*sizeof(int))); //Jack Yu: include origin_z and lineage tag
+			1024*(8*sizeof(float) + 3*sizeof(int))); //Dian Yu: include origin_z and lineage tag
 		output_buffer events_buff(events_out,
-			1024*1024*(6*sizeof(float) + 4*sizeof(int))); //Jack Yu: include origin_z, lineage tag and event ID
+			1024*1024*(6*sizeof(float) + 4*sizeof(int))); //Dian Yu: include origin_z, lineage tag and event ID
 
 		for (;;)
 		{
@@ -210,9 +210,9 @@ int main(int argc, char **argv)
 				events_buff.add(std::array<float, 6>{
 					after.pos.x, after.pos.y, after.pos.z,
 					before.kin_energy, before.kin_energy - after.kin_energy, after.origin_z});
-				events_buff.add(std::array<int, 4>{ // Jonathan C & Jack Yu edit
+				events_buff.add(std::array<int, 4>{ // Jonathan Choi & Dian Yu edit
 					pixels[tag].x, pixels[tag].y, after.tag_lineage,
-				    after.event_id_int}); }); // Jonathan C & Jack Yu edit
+				    after.event_id_int}); }); // Jonathan Choi & Dian Yu edit
 
 			// Flush output data
 			d.flush_detected([&detect_buff, &pixels](particle const &p, uint32_t t)
@@ -220,9 +220,9 @@ int main(int argc, char **argv)
 				detect_buff.add(std::array<float, 8>{
 					p.pos.x, p.pos.y, p.pos.z,
 					p.dir.x, p.dir.y, p.dir.z, p.kin_energy,
-				    p.origin_z}); // Jonathan C & Jack Yu edit
+				    p.origin_z}); // Jonathan Choi & Dian Yu edit
 				detect_buff.add(std::array<int, 3>{ 
-					pixels[t].x, pixels[t].y, p.tag_lineage}); }); // Jonathan C & Jack Yu edit, no p.event_id_int
+					pixels[t].x, pixels[t].y, p.tag_lineage}); }); // Jonathan Choi & Dian Yu edit, no p.event_id_int
 			
 		}
 

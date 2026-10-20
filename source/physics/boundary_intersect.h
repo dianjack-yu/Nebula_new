@@ -77,25 +77,46 @@ struct boundary_intersect
 		//     If not detected, they pass through as if no intersection event has taken place.
 		switch (material_idx_out) {
 		case nbl::special_materials::DETECTOR:
+			this_particle.event_id_int = 991; //Dian Yu: Record detection event
+			particle_mgr[particle_idx] = this_particle;
 			particle_mgr.detect(particle_idx);
 			return;
+			
 		case nbl::special_materials::DETECTOR_LT50:
-			if (this_particle.kin_energy < 50)
+			if (this_particle.kin_energy < 50) {
+				this_particle.event_id_int = 992; //Dian Yu: Record SE detection event
+				particle_mgr[particle_idx] = this_particle;
 				particle_mgr.detect(particle_idx);
+				return;
+			}
+			//Dian Yu: If not detected, pass through as if no intersection took place (upstream behaviour)
 			return;
+			
 		case nbl::special_materials::DETECTOR_GE50:
-			if (this_particle.kin_energy >= 50)
+			if (this_particle.kin_energy >= 50) {
+				this_particle.event_id_int = 993; //Dian Yu: Record BSE/TE detection event
+				particle_mgr[particle_idx] = this_particle;
 				particle_mgr.detect(particle_idx);
+				return;
+			}
+			//Dian Yu: If not detected, pass through as if no intersection took place (upstream behaviour)
 			return;
+			
 		case nbl::special_materials::TERMINATOR:
+			this_particle.event_id_int = 994; //Dian Yu: Record termination event
+			particle_mgr[particle_idx] = this_particle;
 			particle_mgr.terminate(particle_idx);
 			return;
+			
 		case nbl::special_materials::MIRROR:
+			this_particle.event_id_int = 995; //Dian Yu: Record mirror event
 			this_particle.dir = normalised_dir - 2*last_triangle_normal*cos_theta;
 			particle_mgr[particle_idx] = this_particle;
 			return;
+			
 		case nbl::special_materials::NOP:
 			return;
+			
 		default:
 			break;
 		}
@@ -127,6 +148,11 @@ struct boundary_intersect
 					// see thesis T.V. Eq. 3.139
 					this_particle.dir = (normalised_dir - last_triangle_normal*cos_theta)
 						+ s * last_triangle_normal * cos_theta;
+					this_particle.event_id_int = 997; // Dian Yu: record transmission with refraction event
+				}
+				else
+				{
+					this_particle.event_id_int = 996; // Dian Yu: record transmission without refraction event
 				}
 
 				// if there is transmission, then adjust the kinetic energy,
@@ -145,6 +171,8 @@ struct boundary_intersect
 		{
 			if (dU < 0 && rng.unit() < expr(1 + 0.5_r*this_particle.kin_energy / dU))
 			{
+				this_particle.event_id_int = 998; // Dian Yu: record absorption event
+				particle_mgr[particle_idx] = this_particle;
 				particle_mgr.terminate(particle_idx);
 				return;
 			}
@@ -152,6 +180,7 @@ struct boundary_intersect
 
 		// the only remaining case is total internal reflection
 		this_particle.dir = normalised_dir - 2 * last_triangle_normal*cos_theta;
+		this_particle.event_id_int = 999; // Dian Yu: record total internal reflection event
 		particle_mgr[particle_idx] = this_particle;
 	}
 };

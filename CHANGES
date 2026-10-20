@@ -1,10 +1,13 @@
 nebula changelog
 
 1.1.0 (2026-07-24 by Dian Yu)
-  - Add variable phonon domain
-  - Add variable initial material
-  - Add escape depth and event ID
-  - Prescan speedup
+  - Add variable phonon domain per material (--phonon-domain)
+  - Add variable initial material for primary electrons (--initial-material)
+  - Add origin z position (escape depth), lineage tag (thanks Jonathan Choi) and event ID to electrons
+  - New file formats for primary, detected electron and energy deposit files (see README)
+  - Add nebula_cpu_all_events program recording every scattering and boundary event
+  - Prescan speedup (GPU version)
+  - Increase EPSILON by an order of magnitude to suppress electrons leaking from the geometry
 
 1.0.3 (WIP)
   - (No real code change) Drop support for C++11 and CUDA <9.2; add support for modern versions of CUDA.

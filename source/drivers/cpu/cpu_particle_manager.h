@@ -23,7 +23,8 @@ public:
 	static void destroy(cpu_particle_manager & manager);
 
 	// Push particles to GPU. Returns how many particles were actually pushed.
-	particle_index_t push(particle* particles, primary_tag_t* tags, particle_index_t N);
+	particle_index_t push(particle* particles, primary_tag_t* tags, particle_index_t N,
+		material_index_t initial_material = -123); //Dian Yu: default to vacuum but can be changed
 
 	// Sets detected particles to terminated and calls callback.
 	// Does not remove detected particles from memory.

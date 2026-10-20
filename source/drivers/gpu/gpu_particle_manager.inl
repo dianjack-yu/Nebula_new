@@ -6,7 +6,7 @@
 
 namespace nbl { namespace drivers {
 
-template<typename material_manager_t>
+	template<typename material_manager_t>
 CPU gpu_particle_manager<material_manager_t>
 	gpu_particle_manager<material_manager_t>::create(particle_index_t capacity)
 {
@@ -104,8 +104,9 @@ CPU void gpu_particle_manager<material_manager_t>::destroy(
 
 template<typename material_manager_t>
 CPU auto gpu_particle_manager<material_manager_t>::push(
-	particle* particles, uint32_t* tags, particle_index_t N)
--> particle_index_t
+	particle* particles, uint32_t* tags, particle_index_t N,
+	material_index_t initial_material) //Dian Yu: variable initial material
+	-> particle_index_t
 {
 	const auto capacity = _capacity;
 
@@ -147,10 +148,10 @@ CPU auto gpu_particle_manager<material_manager_t>::push(
 				tag_p[free_indices[i]] = tags[i];
 		});
 	cuda::cuda_mem_scope<material_index_t>(_material_idx, _capacity,
-		[&free_indices](material_index_t* material_idx_p)
+		[&free_indices, initial_material](material_index_t* material_idx_p) //Dian Yu: capture initial material
 		{
 			for(auto idx : free_indices)
-				material_idx_p[idx] = -123;
+				material_idx_p[idx] = initial_material; //Dian Yu: set initial material instead of VACUUM
 		});
 	cuda::cuda_mem_scope<triangle*>(_last_triangle, _capacity,
 		[&free_indices](triangle** last_triangle_p)
@@ -348,7 +349,7 @@ PHYSICS void gpu_particle_manager<material_manager_t>::add_particle(
 	_status[target_idx] = NO_EVENT;
 	_particles[target_idx] = new_particle;
 	_tags[target_idx] = new_tag;
-	_material_idx[target_idx] = -123; // TODO
+	_material_idx[target_idx] = -123; // Dian Yu: default to vacuum
 	_last_triangle[target_idx] = nullptr;
 }
 template<typename material_manager_t>
@@ -423,5 +424,49 @@ PHYSICS void gpu_particle_manager<material_manager_t>::inelastic(particle_index_
 {
 	_status[i] = INELASTIC_EVENT;
 }
+
+template<typename material_manager_t> //Dian Yu: for new prescan method
+CPU auto gpu_particle_manager<material_manager_t>::get_counts() const
+-> std::pair<particle_index_t, particle_index_t>
+{
+	// Allocate host memory for the counts (pinned for faster transfer)
+	particle_index_t* h_counts;
+	cudaMallocHost(&h_counts, 2 * sizeof(particle_index_t));
+	h_counts[0] = 0; // running count
+	h_counts[1] = 0; // detected count
+	
+	// Allocate device memory for the counts
+	particle_index_t* d_counts;
+	cudaMalloc(&d_counts, 2 * sizeof(particle_index_t));
+	cudaMemcpy(d_counts, h_counts, 2 * sizeof(particle_index_t), cudaMemcpyHostToDevice);
+	
+	// RTX 4080 optimized settings
+	unsigned int threads_per_block = 512;
+	unsigned int num_blocks = (_capacity + threads_per_block - 1) / threads_per_block;
+	
+	// Call the kernel - it will be defined in gpu_driver.inl
+	gpu_count_particles<<<num_blocks, threads_per_block>>>(
+		*this, d_counts, _capacity
+	);
+	
+	// Copy results back
+	cudaMemcpy(h_counts, d_counts, 2 * sizeof(particle_index_t), cudaMemcpyDeviceToHost);
+	
+	std::pair<particle_index_t, particle_index_t> result(h_counts[0], h_counts[1]);
+	
+	// Cleanup
+	cudaFree(d_counts);
+	cudaFreeHost(h_counts);
+	
+	return result;
+}
+
+template<typename material_manager_t> //Dian Yu: for new prescan method
+inline PHYSICS auto gpu_particle_manager<material_manager_t>::get_status(particle_index_t i) const
+-> status_t
+{
+	return _status[i];
+}
+
 
 }} // namespace nbl::drivers

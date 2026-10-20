@@ -15,13 +15,16 @@ public:
 	static CPU void destroy(gpu_particle_manager & manager);
 
 	// Push particles to GPU. Returns how many particles were actually pushed.
-	CPU particle_index_t push(particle* particles, uint32_t* tags, particle_index_t N);
+	CPU particle_index_t push(particle* particles, uint32_t* tags, particle_index_t N,
+		material_index_t initial_material = -123); //Dian Yu: variable initial material, default to vacuum
 
 	template<typename detect_function>
 	CPU void flush_detected(detect_function function);
 
 	CPU particle_index_t get_running_count() const;
 	CPU particle_index_t get_detected_count() const;
+
+    CPU std::pair<particle_index_t, particle_index_t> get_counts() const;  // Dian Yu: for new prescan method
 
 	// Sort particles by event type. Used to prevent warp divergence.
 	CPU void sort();
@@ -72,6 +75,8 @@ public:
 	inline PHYSICS void pending(particle_index_t i);
 	// Set particle to inelastic (for previously pending event)
 	inline PHYSICS void inelastic(particle_index_t i);
+    // Dian Yu: for new prescan method
+	inline PHYSICS status_t get_status(particle_index_t i) const;
 
 private:
 	inline PHYSICS particle_index_t get_secondary_slot() const;

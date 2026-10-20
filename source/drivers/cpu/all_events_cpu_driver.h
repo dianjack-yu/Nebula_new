@@ -32,7 +32,7 @@ public:
 		geometry_manager_t const & geometry,
 		real min_energy, real max_energy,
 		seed_t seed = util::random_generator<false>::default_seed,
-		int initial_material = -123) //Jack Yu: default initial material
+		int initial_material = -123) //Dian Yu: default initial material
 		: base_t(intersect, materials, geometry, min_energy, max_energy, seed, initial_material)
 	{}
 
@@ -54,7 +54,7 @@ public:
 
 			this->init(particle_idx);
 
-			// Jack Yu: Tracking both scattering and intersection
+			// Dian Yu: Tracking both scattering and intersection
 			bool track_scatter = this->_particles.next_scatter(particle_idx);
 			bool track_intersect = this->_particles.next_intersect(particle_idx);
 			bool track = track_scatter || track_intersect;
@@ -78,7 +78,7 @@ public:
 
 			const particle after = this->_particles[particle_idx];
 
-			if (track) // Jack Yu: removed && before.kin_energy != after.kin_energy
+			if (track) // Dian Yu: removed && before.kin_energy != after.kin_energy
 				function(before, after,
 					this->_particles.get_primary_tag(particle_idx));
 		}
@@ -91,7 +91,7 @@ public:
 		for (particle_index_t particle_idx = 0;
 			particle_idx < this->_particles.get_total_count(); ++particle_idx)
 		{
-			// Jack Yu: Record initial state (event ID 0)
+			// Dian Yu: Record initial state (event ID 0)
 			{
 				const particle initial = this->_particles[particle_idx];
 				particle initial_event = initial;
@@ -103,7 +103,7 @@ public:
 			{
 				this->init(particle_idx);
 
-				// Jack Yu: Tracking both scattering and intersection
+				// Dian Yu: Tracking both scattering and intersection
 			    bool track_scatter = this->_particles.next_scatter(particle_idx);
 			    bool track_intersect = this->_particles.next_intersect(particle_idx);
 			    bool track = track_scatter || track_intersect;
@@ -127,7 +127,7 @@ public:
 
 				const particle after = this->_particles[particle_idx];
 			
-				if (track) // Jack Yu: removed && before.kin_energy != after.kin_energy
+				if (track) // Dian Yu: removed && before.kin_energy != after.kin_energy
 					func(before, after,
 						this->_particles.get_primary_tag(particle_idx));
 

@@ -51,8 +51,8 @@ using std::size_t;
 	#endif // USE_DOUBLE
 #endif // CUDA_HEADERS_AVAILABLE
 
-/// Small value limiting accuracy of numerical computations
-constexpr real EPSILON = 10 * std::numeric_limits<real>::epsilon();
+/// Small value limiting accuracy of numerical computations, increased 10x by Dian Yu
+constexpr real EPSILON = 100 * std::numeric_limits<real>::epsilon();
 
 /**
  * \brief User-defined literal for using real numbers

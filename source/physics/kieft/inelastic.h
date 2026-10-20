@@ -1,252 +1,308 @@
 #ifndef __KIEFT_INELASTIC_H_
 #define __KIEFT_INELASTIC_H_
 
-namespace nbl { namespace scatter {
-
-/**
- * \brief Inelastic scattering, according to the Kieft & Bosch model.
- *
- *   - See doi:10.1088/0022-3727/41/21/215310 (Kieft paper)
- *   - See doi:10.4233/uuid:f214f594-a21f-4318-9f29-9776d60ab06c (Verduin thesis)
- *
- * \tparam gpu_flag               Is the code to be run on a GPU?
- * \tparam optical_phonon_loss    Assume optical phonon loss for energy loss less than band gap
- * \tparam generate_secondary     Generate secondary electrons
- * \tparam instantaneous_momentum Consider instantaneous momentum for SE
- * \tparam momentum_conservation  Obey conservation of momentum
- */
-template<bool gpu_flag,
-	bool optical_phonon_loss = true,
-	bool generate_secondary = true,
-	bool instantaneous_momentum = true,
-	bool momentum_conservation = true>
-class kieft_inelastic
+namespace nbl
 {
-public:
-	/**
-	 * \brief Indicate when this class generates secondary electrons
-	 */
-	constexpr static bool may_create_se = generate_secondary;
-
-	/**
-	 * \brief Print diagnostic info
-	 */
-	static void print_info(std::ostream& stream)
+	namespace scatter
 	{
-		stream << std::boolalpha <<
-			" * Kieft & Bosch inelastic model\n"
-			"   Options:\n"
-			"     - Optical phonon loss: " << optical_phonon_loss << "\n"
-			"     - Generate secondary electrons: " << generate_secondary << "\n"
-			"     - Instantaneous momentum transfer: " << instantaneous_momentum << "\n"
-			"     - Momentum conservation: " << momentum_conservation << "\n";
-	}
 
-	/**
-	 * \brief Get maximal energy, in eV
-	 */
-	PHYSICS real get_max_energy() const
-	{
-		return expr(_log_imfp_table.get_scalemax());
-	}
-
-	/**
-	 * \brief Sample a random free path length
-	 */
-	inline PHYSICS real sample_path(particle const & this_particle, util::random_generator<gpu_flag> & rng) const
-	{
-		// Get inverse mean free path for this kinetic energy
-		const real imfp = expr(_log_imfp_table.get(logr(this_particle.kin_energy)));
-
-		// Draw a distance
-		return rng.exponential(1 / imfp);
-	}
-
-	/**
-	 * \brief Perform a scattering event
-	 */
-	template<typename particle_manager>
-	inline PHYSICS void execute(
-		particle_manager& particle_mgr,
-		typename particle_manager::particle_index_t particle_idx,
-		util::random_generator<gpu_flag>& rng) const
-	{
-		// Retrieve current particle from global memory
-		auto this_particle = particle_mgr[particle_idx];
-
-		// draw a random zero-momentum energy loss of the primary electron
-		real omega0;
-		{// see thesis T.V. Eq. 3.82.
-			const real x = logr(this_particle.kin_energy);
-			const real y = rng.unit();
-			omega0 = expr(_log_icdf_table.get(x, y));
-		}
-
-		// draw a random binding energy of the secondary electron.
-		real binding;
+		/**
+		 * \brief Inelastic scattering, according to the Kieft & Bosch model.
+		 *
+		 *   - See doi:10.1088/0022-3727/41/21/215310 (Kieft paper)
+		 *   - See doi:10.4233/uuid:f214f594-a21f-4318-9f29-9776d60ab06c (Verduin thesis)
+		 *
+		 * \tparam gpu_flag               Is the code to be run on a GPU?
+		 * \tparam optical_phonon_loss    Assume optical phonon loss for energy loss less than band gap
+		 * \tparam generate_secondary     Generate secondary electrons
+		 * \tparam instantaneous_momentum Consider instantaneous momentum for SE
+		 * \tparam momentum_conservation  Obey conservation of momentum
+		 */
+		template <bool gpu_flag,
+				  bool optical_phonon_loss = true,
+				  bool generate_secondary = true,
+				  bool instantaneous_momentum = true,
+				  bool momentum_conservation = true>
+		class kieft_inelastic
 		{
-			const real x = logr(omega0);
-			const real y = rng.unit();
-			binding = _ionisation_table.get_rounddown(x, y);
-		}
+		public:
+			/**
+			 * \brief Indicate when this class generates secondary electrons
+			 */
+			constexpr static bool may_create_se = generate_secondary;
 
-		// draw a random total energy loss for the primary electron
-		real omega;
-		{// see thesis T.V. Eq. 3.85.
-			real omega_max = 0.5_r*(this_particle.kin_energy + omega0 - _fermi); // upper limit of eq. 9 in Ashley, but corrected for the fermi energy
-			real omega_min = omega0;
-			real w0 = minr(omega0 - 1, maxr(0, binding) - _fermi);
-			if (this_particle.kin_energy > 2*omega0)
+			/**
+			 * \brief Print diagnostic info
+			 */
+			static void print_info(std::ostream &stream)
 			{
-				// equation 10 in Ashley
-				omega_min = 0.5_r*(this_particle.kin_energy + omega0
-					- sqrtr(this_particle.kin_energy*(this_particle.kin_energy - 2*omega0)));
-				w0 = omega0;
+				stream << std::boolalpha << " * Kieft & Bosch inelastic model\n"
+											"   Options:\n"
+											"     - Optical phonon loss: "
+					   << optical_phonon_loss << "\n"
+												 "     - Generate secondary electrons: "
+					   << generate_secondary << "\n"
+												"     - Instantaneous momentum transfer: "
+					   << instantaneous_momentum << "\n"
+													"     - Momentum conservation: "
+					   << momentum_conservation << "\n";
 			}
 
-			const real U = rng.unit();
-			if ((w0 > 0) && (omega_min > w0) && (omega_min < omega_max)) {
-				// For nonzero binding energy, sample omega according to equation 7 in Ashley,
-				// using the lower and upper limits as defined above.
-				// For inner-shell ionization (Ebind > 50 eV) we substitute the Fermi-energy corrected
-				// binding energy for omegaprime (so that the differential cross section becomes inversely
-				// proportional to both the total energy transfer and the kinetic energy of the secondary
-				// electron).
-				const real f_min = 1 / w0*logr((omega_min - w0) / omega_min);
-				const real f_max = 1 / w0*logr((omega_max - w0) / omega_max);
-				omega = -w0 / expm1r(w0*(f_min*(1 - U) + f_max*U));
+			/**
+			 * \brief Get maximal energy, in eV
+			 */
+			PHYSICS real get_max_energy() const
+			{
+				return expr(_log_imfp_table.get_scalemax());
 			}
-			else {
-				// In some cases (typically only occuring for binding < 50 eV) we get omega_min > omega_max.
-				// This is due to our Fermi energy correction in the definition of omega_max. Physically, this
-				// means that momentum cannot be conserved because the primary electron cannot have a final
-				// kinetic energy that is lower than the Fermi energy. In this (relatively rare) case we have
-				// to ignore momentum conservation and probe omega according to a 1/(omega)^2 distribution
-				// with omega0 and omega_max as lower and upper limits respectively.
-				omega = omega0*omega_max / (omega0*(1 - U) + omega_max*U);
-			}
-		}
 
-		// special cases if there is no binding energy:
-		if (binding < 0) {
-			if (_band_gap < 0) {
-				// TODO for metals: excitation of a fermi sea electron
+			/**
+			 * \brief Sample a random free path length
+			 */
+			inline PHYSICS real sample_path(particle const &this_particle, util::random_generator<gpu_flag> &rng) const
+			{
+				// Get inverse mean free path for this kinetic energy
+				const real imfp = expr(_log_imfp_table.get(logr(this_particle.kin_energy)));
+
+				// Draw a distance
+				return rng.exponential(1 / imfp);
 			}
-			else if (omega0 > _band_gap) {
-				// electron excitation across the band gap (see page 78 thesis T.V.)
-				binding = _band_gap;
-			}
-			else {
-				// sub-band gap energy loss in semiconductors and insulators (see page 78 thesis T.V.)
-				// energy loss due to longitudinal optical phonon excitation is assumed
-				// update energy and EXIT
-				if (optical_phonon_loss)
-				{
-					this_particle.kin_energy -= omega0;
-					particle_mgr[particle_idx] = this_particle;
+
+			/**
+			 * \brief Perform a scattering event
+			 */
+			template <typename particle_manager>
+			inline PHYSICS void execute(
+				particle_manager &particle_mgr,
+				typename particle_manager::particle_index_t particle_idx,
+				util::random_generator<gpu_flag> &rng) const
+			{
+				// Retrieve current particle from global memory
+				auto this_particle = particle_mgr[particle_idx];
+
+				// draw a random zero-momentum energy loss of the primary electron
+				real omega0;
+				{ // see thesis T.V. Eq. 3.82.
+					const real x = logr(this_particle.kin_energy);
+					const real y = rng.unit();
+					omega0 = expr(_log_icdf_table.get(x, y));
 				}
-				return;
+
+				// draw a random binding energy of the secondary electron.
+				real binding;
+				{
+					const real x = logr(omega0);
+					const real y = rng.unit();
+					binding = _ionisation_table.get_rounddown(x, y);
+				}
+
+				// draw a random total energy loss for the primary electron
+				real omega;
+				{																		   // see thesis T.V. Eq. 3.85.
+					real omega_max = 0.5_r * (this_particle.kin_energy + omega0 - _fermi); // upper limit of eq. 9 in Ashley, but corrected for the fermi energy
+					real omega_min = omega0;
+					real w0 = minr(omega0 - 1, maxr(0, binding) - _fermi);
+					if (this_particle.kin_energy > 2 * omega0)
+					{
+						// equation 10 in Ashley
+						omega_min = 0.5_r * (this_particle.kin_energy + omega0 - sqrtr(this_particle.kin_energy * (this_particle.kin_energy - 2 * omega0)));
+						w0 = omega0;
+					}
+
+					const real U = rng.unit();
+					if ((w0 > 0) && (omega_min > w0) && (omega_min < omega_max))
+					{
+						// For nonzero binding energy, sample omega according to equation 7 in Ashley,
+						// using the lower and upper limits as defined above.
+						// For inner-shell ionization (Ebind > 50 eV) we substitute the Fermi-energy corrected
+						// binding energy for omegaprime (so that the differential cross section becomes inversely
+						// proportional to both the total energy transfer and the kinetic energy of the secondary
+						// electron).
+						const real f_min = 1 / w0 * logr((omega_min - w0) / omega_min);
+						const real f_max = 1 / w0 * logr((omega_max - w0) / omega_max);
+						omega = -w0 / expm1r(w0 * (f_min * (1 - U) + f_max * U));
+                        this_particle.event_id_int = 4; // Dian Yu: Record inner-shell excitation event of electron
+					}
+					else
+					{
+						// In some cases (typically only occuring for binding < 50 eV) we get omega_min > omega_max.
+						// This is due to our Fermi energy correction in the definition of omega_max. Physically, this
+						// means that momentum cannot be conserved because the primary electron cannot have a final
+						// kinetic energy that is lower than the Fermi energy. In this (relatively rare) case we have
+						// to ignore momentum conservation and probe omega according to a 1/(omega)^2 distribution
+						// with omega0 and omega_max as lower and upper limits respectively.
+						omega = omega0 * omega_max / (omega0 * (1 - U) + omega_max * U);
+						this_particle.event_id_int = 42; //Dian Yu: Record excitation without momentum conservation
+					}
+				}
+
+				// special cases if there is no binding energy:
+				if (binding < 0)
+				{
+					if (_band_gap < 0)
+					{
+						// TODO for metals: excitation of a fermi sea electron
+					}
+					else if (omega0 > _band_gap)
+					{
+						// electron excitation across the band gap (see page 78 thesis T.V.)
+						binding = _band_gap;
+					}
+					else
+					{
+						// sub-band gap energy loss in semiconductors and insulators (see page 78 thesis T.V.)
+						// energy loss due to longitudinal optical phonon excitation is assumed
+						// update energy and EXIT
+						if (optical_phonon_loss)
+						{
+							this_particle.kin_energy -= omega0;
+							this_particle.event_id_int = 31; // Dian Yu: Record optical phonon loss of electron
+							particle_mgr[particle_idx] = this_particle;
+						}
+						return;
+					}
+				}
+				binding = maxr(0, binding);
+
+				// Normalise direction
+				normalise(this_particle.dir);
+
+				// determine random normal vector to determine the scattering direction
+				vec3 normal_dir = normalised(make_normal_vec(this_particle.dir, rng.phi()));
+
+				// Determine the inelastic scattering angles.
+				// We have strictly followed the method of Ivanchenko (and thus Kieft and Bosch)
+				// See for more details thesis T.V. page 80-85.
+				const real _K = this_particle.kin_energy - _fermi + 2 * binding; // see thesis T.V. Eq. 3.105
+				const real dK = binding + omega;								 // see thesis T.V. Eq. 3.106
+				const real cos_theta = sqrtr(dK / _K);							 // see thesis T.V. Eq. 3.100
+				const real sin_theta = sqrtr(1 - saturater(cos_theta * cos_theta));
+
+				// Determine initial secondary direction (see thesis T.V. Eq. 3.107)
+				// The initial direction is determined by assuming that the secondary electron
+				// is at rest
+				vec3 secondary_dir = this_particle.dir * cos_theta + normal_dir * sin_theta;
+
+				// Add (optional) direction to account for the (intrinsic) instantaneous momentum
+				//  of the secondary electron.
+				// See thesis T.V. Eq. 3.108
+				if (instantaneous_momentum)
+				{
+					normalise(secondary_dir);
+					secondary_dir += sqrtr(binding / dK) * rng.uniform_vector();
+				}
+
+				// ensure proper normalization of the secondary directional vector.
+				normalise(secondary_dir);
+
+				if (generate_secondary)
+				{
+					particle secondary_particle;
+					secondary_particle.kin_energy = _fermi + omega - binding; // See thesis T.V. Eq. 3.86
+					secondary_particle.pos = this_particle.pos;
+					secondary_particle.origin_z = this_particle.pos.z;  // Dian Yu: record creation position of SE
+					secondary_particle.event_id_int = this_particle.event_id_int; // Dian Yu: record corresponding scattering event type of SE
+					secondary_particle.dir = secondary_dir;
+
+					// Jonathan Choi: copy pixel tags and assign lineage
+					// pixel (beam) tags always follow the parent
+					secondary_particle.tag_x = this_particle.tag_x;
+					secondary_particle.tag_y = this_particle.tag_y;
+
+					// Jonathan Choi: generation lineage tag
+					switch (this_particle.tag_lineage)
+					{
+					case 0:
+						secondary_particle.tag_lineage = 11;
+						break; // SE1, 1st gen
+					case 1:
+						secondary_particle.tag_lineage = 21;
+						break; // SE2, 1st gen
+					case 11:
+						secondary_particle.tag_lineage = 12;
+						break; // SE1, 2nd gen
+					case 21:
+						secondary_particle.tag_lineage = 22;
+						break; // SE2, 2nd gen
+					case 12:
+					case 13:
+						secondary_particle.tag_lineage = 13;
+						break; // SE1, 3rd generation and beyond
+					case 22:
+					case 23:
+						secondary_particle.tag_lineage = 23;
+						break; // Dian Yu: SE2, 3rd generation and beyond
+					default:
+						secondary_particle.tag_lineage = 33;
+						break; // Dian Yu: unexpected parent tag, should not occur
+					}
+
+					particle_mgr.create_secondary(particle_idx, secondary_particle);
+				}
+
+				this_particle.kin_energy -= omega;
+
+				if (momentum_conservation)
+				{
+					// primary direction determined by non-relativistic momentum-conservation, i.e.:
+					//   sin(theta)*primary_dir_2 = primary_dir - cos(theta)*secondary_dir;
+					// See thesis T.V. Eq. 3.111
+					this_particle.dir -= cos_theta * secondary_dir;
+				}
+
+				// Jonathan Choi: flip primary from 0 -> 1 when dz > 0
+				if (this_particle.tag_lineage == 0 && this_particle.dir.z > 0.0f)
+				{
+					this_particle.tag_lineage = 1;
+					this_particle.origin_z = this_particle.pos.z;  // Dian Yu: record turnaround position for BSE
+				}
+				//
+
+				// Store the scattered particle in memory
+				particle_mgr[particle_idx] = this_particle;
 			}
-		}
-		binding = maxr(0, binding);
 
-		// Normalise direction
-		normalise(this_particle.dir);
-
-		// determine random normal vector to determine the scattering direction
-		vec3 normal_dir = normalised(make_normal_vec(this_particle.dir, rng.phi()));
-
-		// Determine the inelastic scattering angles.
-		// We have strictly followed the method of Ivanchenko (and thus Kieft and Bosch)
-		// See for more details thesis T.V. page 80-85.
-		const real _K = this_particle.kin_energy - _fermi + 2*binding; // see thesis T.V. Eq. 3.105
-		const real dK = binding + omega;        // see thesis T.V. Eq. 3.106
-		const real cos_theta = sqrtr(dK / _K);  // see thesis T.V. Eq. 3.100
-		const real sin_theta = sqrtr(1 - saturater(cos_theta*cos_theta));
-
-		// Determine initial secondary direction (see thesis T.V. Eq. 3.107)
-		// The initial direction is determined by assuming that the secondary electron
-		// is at rest
-		vec3 secondary_dir = this_particle.dir*cos_theta + normal_dir*sin_theta;
-
-		// Add (optional) direction to account for the (intrinsic) instantaneous momentum
-		//  of the secondary electron.
-		// See thesis T.V. Eq. 3.108
-		if (instantaneous_momentum)
-		{
-			normalise(secondary_dir);
-			secondary_dir += sqrtr(binding / dK) * rng.uniform_vector();
-		}
-
-		// ensure proper normalization of the secondary directional vector.
-		normalise(secondary_dir);
-
-		if (generate_secondary)
-		{
-			particle secondary_particle;
-			secondary_particle.kin_energy = _fermi + omega - binding; // See thesis T.V. Eq. 3.86
-			secondary_particle.pos = this_particle.pos;
-			secondary_particle.dir = secondary_dir;
-
-			particle_mgr.create_secondary(particle_idx, secondary_particle);
-		}
-
-		this_particle.kin_energy -= omega;
-
-		if (momentum_conservation)
-		{
-			// primary direction determined by non-relativistic momentum-conservation, i.e.:
-			//   sin(theta)*primary_dir_2 = primary_dir - cos(theta)*secondary_dir;
-			// See thesis T.V. Eq. 3.111
-			this_particle.dir -= cos_theta * secondary_dir;
-		}
-
-		// Store the scattered particle in memory
-		particle_mgr[particle_idx] = this_particle;
-	}
-
-
-	/**
-	 * \brief Create, given a material file.
-	 */
-	static CPU kieft_inelastic create(hdf5_file const & mat)
-	{
-		if (!mat.exists("kieft/inelastic"))
-			throw std::runtime_error("Kieft inelastic model not found in "
-				"material file " + mat.get_filename());
-
-		kieft_inelastic inel;
-
-		inel._fermi = static_cast<real>(mat.get_property_quantity("fermi") / units::eV);
-		inel._band_gap = static_cast<real>(mat.get_property_quantity("band_gap", -1*units::eV) / units::eV);
-
-		{
-			inel._log_imfp_table = mat.fill_table1D<real>("/kieft/inelastic/imfp");
-			auto K_range = mat.get_log_dimscale("/kieft/inelastic/imfp", 0,
-				inel._log_imfp_table.width());
-			inel._log_imfp_table.set_scale(
-				(real)std::log(K_range.front()/units::eV), (real)std::log(K_range.back()/units::eV));
-			inel._log_imfp_table.mem_scope([&](real* imfp_vector)
+			/**
+			 * \brief Create, given a material file.
+			 */
+			static CPU kieft_inelastic create(hdf5_file const &mat)
 			{
+				if (!mat.exists("kieft/inelastic"))
+					throw std::runtime_error("Kieft inelastic model not found in "
+											 "material file " +
+											 mat.get_filename());
+
+				kieft_inelastic inel;
+
+				inel._fermi = static_cast<real>(mat.get_property_quantity("fermi") / units::eV);
+				inel._band_gap = static_cast<real>(mat.get_property_quantity("band_gap", -1 * units::eV) / units::eV);
+
+				{
+					inel._log_imfp_table = mat.fill_table1D<real>("/kieft/inelastic/imfp");
+					auto K_range = mat.get_log_dimscale("/kieft/inelastic/imfp", 0,
+														inel._log_imfp_table.width());
+					inel._log_imfp_table.set_scale(
+						(real)std::log(K_range.front() / units::eV), (real)std::log(K_range.back() / units::eV));
+					inel._log_imfp_table.mem_scope([&](real *imfp_vector)
+												   {
 				const real unit = real(mat.get_unit("/kieft/inelastic/imfp") * units::nm);
 				for (size_t x = 0; x < K_range.size(); ++x)
 				{
 					imfp_vector[x] = std::log(imfp_vector[x] * unit);
+				} });
 				}
-			});
-		}
 
-		{
-			inel._log_icdf_table = mat.fill_table2D<real>("/kieft/inelastic/w0_icdf");
-			auto K_range = mat.get_log_dimscale("/kieft/inelastic/w0_icdf", 0,
-				inel._log_icdf_table.width());
-			auto P_range = mat.get_lin_dimscale("/kieft/inelastic/w0_icdf", 1,
-				inel._log_icdf_table.height());
-			inel._log_icdf_table.set_scale(
-				(real)std::log(K_range.front()/units::eV), (real)std::log(K_range.back()/units::eV),
-				(real)P_range.front(), (real)P_range.back());
-			inel._log_icdf_table.mem_scope([&](real** icdf_vector)
-			{
+				{
+					inel._log_icdf_table = mat.fill_table2D<real>("/kieft/inelastic/w0_icdf");
+					auto K_range = mat.get_log_dimscale("/kieft/inelastic/w0_icdf", 0,
+														inel._log_icdf_table.width());
+					auto P_range = mat.get_lin_dimscale("/kieft/inelastic/w0_icdf", 1,
+														inel._log_icdf_table.height());
+					inel._log_icdf_table.set_scale(
+						(real)std::log(K_range.front() / units::eV), (real)std::log(K_range.back() / units::eV),
+						(real)P_range.front(), (real)P_range.back());
+					inel._log_icdf_table.mem_scope([&](real **icdf_vector)
+												   {
 				const real unit = real(mat.get_unit("/kieft/inelastic/w0_icdf") / units::eV);
 				const auto fermi = mat.get_property_quantity("fermi");
 				for (size_t x = 0; x < K_range.size(); ++x)
@@ -259,21 +315,20 @@ public:
 							icdf_vector[x][y] * unit
 						)));
 					}
+				} });
 				}
-			});
-		}
 
-		{
-			inel._ionisation_table = mat.fill_table2D<real>("/kieft/ionization/binding_icdf");
-			auto K_range = mat.get_log_dimscale("/kieft/ionization/binding_icdf", 0,
-				inel._ionisation_table.width());
-			auto P_range = mat.get_lin_dimscale("/kieft/ionization/binding_icdf", 1,
-				inel._ionisation_table.height());
-			inel._ionisation_table.set_scale(
-				(real)std::log(K_range.front()/units::eV), (real)std::log(K_range.back()/units::eV),
-				(real)P_range.front(), (real)P_range.back());
-			inel._ionisation_table.mem_scope([&](real** ionisation_vector)
-			{
+				{
+					inel._ionisation_table = mat.fill_table2D<real>("/kieft/ionization/binding_icdf");
+					auto K_range = mat.get_log_dimscale("/kieft/ionization/binding_icdf", 0,
+														inel._ionisation_table.width());
+					auto P_range = mat.get_lin_dimscale("/kieft/ionization/binding_icdf", 1,
+														inel._ionisation_table.height());
+					inel._ionisation_table.set_scale(
+						(real)std::log(K_range.front() / units::eV), (real)std::log(K_range.back() / units::eV),
+						(real)P_range.front(), (real)P_range.back());
+					inel._ionisation_table.mem_scope([&](real **ionisation_vector)
+													 {
 				// Get outer_shells vector, containing outer-shell energies sorted from low to high.
 				std::vector<units::quantity<double>> outer_shells;
 				{
@@ -319,82 +374,82 @@ public:
 
 						ionisation_vector[x][y] = real(binding / units::eV);
 					}
+				} });
 				}
-			});
-		}
 
-		return inel;
+				return inel;
+			}
+
+			/**
+			 * \brief Clone from another instance.
+			 */
+			template <bool source_gpu_flag>
+			static CPU kieft_inelastic create(kieft_inelastic<source_gpu_flag, optical_phonon_loss, generate_secondary, instantaneous_momentum, momentum_conservation> const &source)
+			{
+				kieft_inelastic target;
+
+				target._fermi = source._fermi;
+				target._band_gap = source._band_gap;
+
+				target._log_imfp_table = util::table_1D<real, gpu_flag>::create(source._log_imfp_table);
+				target._log_icdf_table = util::table_2D<real, gpu_flag>::create(source._log_icdf_table);
+				target._ionisation_table = util::table_2D<real, gpu_flag>::create(source._ionisation_table);
+
+				return target;
+			}
+
+			/**
+			 * \brief Dealllocate data held by an instance of this class.
+			 */
+			static CPU void destroy(kieft_inelastic &inel)
+			{
+				util::table_1D<real, gpu_flag>::destroy(inel._log_imfp_table);
+				util::table_2D<real, gpu_flag>::destroy(inel._log_icdf_table);
+				util::table_2D<real, gpu_flag>::destroy(inel._ionisation_table);
+			}
+
+		private:
+			/**
+			 * \brief Table storing the inverse mean free path as function of energy.
+			 *
+			 * Actually, stores `log(inverse mean free path / nm^-1)` as function of
+			 * `log(kinetic energy / eV)`.
+			 */
+			util::table_1D<real, gpu_flag> _log_imfp_table;
+
+			/**
+			 * \brief Table storing the probability distribution for "zero-momentum
+			 * energy loss", omega prime.
+			 *
+			 * "ICDF" is short for Inverse Cumulative Distribution Function, which is
+			 * what this table stores.
+			 *
+			 * Specifically, stores `log(omega' / eV)` as function of
+			 *   - x axis: `log(kinetic energy / eV)`
+			 *   - y axis: cumulative probability (between 0 and 1)
+			 */
+			util::table_2D<real, gpu_flag> _log_icdf_table;
+
+			/**
+			 * \brief Ionization table, representing probability of ionizing a given
+			 * inner or outer shell.
+			 *
+			 * Specifically, stores `binding energy / eV` as function of
+			 *   - x axis: `log(kinetic energy / eV)`
+			 *   - y axis: cumulative probability (between 0 and 1)
+			 *
+			 * Be sure to use .get_rounddown() for non-interpolated values
+			 */
+			util::table_2D<real, gpu_flag> _ionisation_table;
+
+			real _fermi;	///< Fermi energy (eV)
+			real _band_gap; ///< Band gap (eV)
+
+			template <bool, bool, bool, bool, bool>
+			friend class kieft_inelastic;
+		};
+
 	}
-
-	/**
-	 * \brief Clone from another instance.
-	 */
-	template<bool source_gpu_flag>
-	static CPU kieft_inelastic create(kieft_inelastic<source_gpu_flag, optical_phonon_loss, generate_secondary, instantaneous_momentum, momentum_conservation> const & source)
-	{
-		kieft_inelastic target;
-
-		target._fermi = source._fermi;
-		target._band_gap = source._band_gap;
-
-		target._log_imfp_table = util::table_1D<real, gpu_flag>::create(source._log_imfp_table);
-		target._log_icdf_table = util::table_2D<real, gpu_flag>::create(source._log_icdf_table);
-		target._ionisation_table = util::table_2D<real, gpu_flag>::create(source._ionisation_table);
-
-		return target;
-	}
-
-	/**
-	 * \brief Dealllocate data held by an instance of this class.
-	 */
-	static CPU void destroy(kieft_inelastic & inel)
-	{
-		util::table_1D<real, gpu_flag>::destroy(inel._log_imfp_table);
-		util::table_2D<real, gpu_flag>::destroy(inel._log_icdf_table);
-		util::table_2D<real, gpu_flag>::destroy(inel._ionisation_table);
-	}
-
-private:
-	/**
-	 * \brief Table storing the inverse mean free path as function of energy.
-	 *
-	 * Actually, stores `log(inverse mean free path / nm^-1)` as function of
-	 * `log(kinetic energy / eV)`.
-	 */
-	util::table_1D<real, gpu_flag> _log_imfp_table;
-
-	/**
-	 * \brief Table storing the probability distribution for "zero-momentum
-	 * energy loss", omega prime.
-	 *
-	 * "ICDF" is short for Inverse Cumulative Distribution Function, which is
-	 * what this table stores.
-	 *
-	 * Specifically, stores `log(omega' / eV)` as function of
-	 *   - x axis: `log(kinetic energy / eV)`
-	 *   - y axis: cumulative probability (between 0 and 1)
-	 */
-	util::table_2D<real, gpu_flag> _log_icdf_table;
-
-	/**
-	 * \brief Ionization table, representing probability of ionizing a given
-	 * inner or outer shell.
-	 *
-	 * Specifically, stores `binding energy / eV` as function of
-	 *   - x axis: `log(kinetic energy / eV)`
-	 *   - y axis: cumulative probability (between 0 and 1)
-	 *
-	 * Be sure to use .get_rounddown() for non-interpolated values
-	 */
-	util::table_2D<real, gpu_flag> _ionisation_table;
-
-	real _fermi;    ///< Fermi energy (eV)
-	real _band_gap; ///< Band gap (eV)
-
-	template<bool, bool, bool, bool, bool>
-	friend class kieft_inelastic;
-};
-
-}} // namespace nbl::scatter
+} // namespace nbl::scatter
 
 #endif // __KIEFT_INELASTIC_H_

@@ -8,13 +8,16 @@ cpu_driver<scatter_list_t, intersect_t, geometry_manager_t>::cpu_driver(
 	material_manager_t const & materials,
 	geometry_manager_t const & geometry,
 	real min_energy, real max_energy,
-	seed_t seed
+	seed_t seed,
+	int initial_material  //Dian Yu: initial material for pushed particles
 ) :
 	_min_energy(min_energy), _max_energy(max_energy),
 	_particles(particle_manager_t::create()),
 	_materials(materials),
 	_geometry(geometry),
 	_intersect(intersect),
+	_initial_material(initial_material), //Dian Yu: set initial material
+
 	rand_state(seed)
 {
 }
@@ -36,7 +39,7 @@ auto cpu_driver<scatter_list_t, intersect_t, geometry_manager_t>::push(
 	particle_index_t N
 ) -> particle_index_t
 {
-	return _particles.push(particles, tags, N);
+	return _particles.push(particles, tags, N, _initial_material); // Dian Yu: variable initial material
 }
 
 template<typename scatter_list_t,
@@ -104,8 +107,16 @@ void cpu_driver<scatter_list_t, intersect_t, geometry_manager_t>::init(particle_
 		}
 
 		// Sample next scattering event
-		// TODO: case of no scattering events!
 		next_scatter = this_material.sample_path(this_particle, rand_state);
+		// Dian Yu: handle case of no scattering events
+		// If no scattering event is available (type == 0 and distance is invalid),
+		// the particle should propagate without scattering until it hits a boundary
+		if (next_scatter.type == 0 && next_scatter.distance < 0)
+		{
+			// Set distance to maximum extent so particle can propagate to geometry boundary
+			next_scatter.distance = _geometry.get_max_extent();
+		}
+
 	}
 
 	// Move particle to next event, unless there is a triangle in the way

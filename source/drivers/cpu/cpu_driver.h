@@ -93,7 +93,8 @@ protected:
 		material_manager_t const & materials,
 		geometry_manager_t const & geometry,
 		real min_energy, real max_energy,
-		seed_t seed = util::random_generator<false>::default_seed);
+		seed_t seed = util::random_generator<false>::default_seed,
+		int initial_material = -123); //Dian Yu: default initial material
 
 	/// Destructor
 	~cpu_driver();
@@ -102,6 +103,7 @@ protected:
 	material_manager_t const & _materials;
 	geometry_manager_t const & _geometry;
 	intersect_t _intersect;
+	int _initial_material;  // Dian Yu: initial material index for pushed particles
 
 	// Random number generator
 	util::random_generator<false> rand_state;

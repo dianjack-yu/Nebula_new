@@ -20,6 +20,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <sstream> // Dian Yu: Required for std::istringstream
 
 // Main typedefs
 using geometry_t = nbl::geometry::octree<true>;
@@ -46,6 +47,7 @@ struct worker_data
 	nbl::geometry::octree_builder::linearized_octree geometry;
 	nbl::cpu_material_manager<cpu_material_t> materials;
 	work_pool primaries;
+
 	std::vector<int2> pixels;
 
 	time_log& timer;
@@ -58,6 +60,7 @@ struct worker_data
 	uint32_t batch_size;
 	real min_energy;
 	real max_energy;
+	int initial_material; // Dian Yu: initial material index
 
 	std::vector<uint32_t> running_count;
 
@@ -102,7 +105,7 @@ void worker_thread(worker_data& data,
 	intersect_t inter;
 	driver d(data.capacity,
 		inter, materials, geometry,
-		data.min_energy, data.max_energy, seed);
+		data.min_energy, data.max_energy, seed, data.initial_material); // Dian Yu: pass initial material
 
 
 	// Do prescan, if desired
@@ -131,12 +134,13 @@ void worker_thread(worker_data& data,
 		{
 			d.do_iteration();
 
-			// TODO: this can be optimised to just one function with one loop.
-			prescan_stats.push_back({ d.get_running_count(), d.get_detected_count() });
+			// Dian Yu: get both counts in a single pass
+	        auto counts = d.get_counts();
+	        prescan_stats.push_back(counts);
 			std::clog << " \rExecuting pre-scan"
 				<< " | running: " << prescan_stats.back().first
 				<< " | detected: " << prescan_stats.back().second;
-		}
+	    }
 		data.timer.stop("Prescan");
 
 		// Find frame_size and batch_size based on the prescan stats.
@@ -178,7 +182,7 @@ void worker_thread(worker_data& data,
 	// Start simulation
 	d.allocate_input_buffers(data.batch_size);
 	d.push_to_buffer(data.primaries);
-	output_buffer buff(data.out_file, 1024*(7*sizeof(float) + 2*sizeof(int)));
+	output_buffer buff(data.out_file, 1024*(8*sizeof(float) + 3*sizeof(int))); //Dian Yu: updated for escape depth, lineage, no event ID
 
 	for (;;)
 	{
@@ -198,13 +202,16 @@ void worker_thread(worker_data& data,
 		// Output detected electrons from buffer
 		auto running_count = d.flush_buffered([&buff, &data](particle p, uint32_t t)
 		{
-			buff.add(std::array<float, 7>{
+			buff.add(std::array<float, 8>{
 				p.pos.x, p.pos.y, p.pos.z,
-				p.dir.x, p.dir.y, p.dir.z, p.kin_energy});
-			buff.add(std::array<int, 2>{
-				data.pixels[t].x, data.pixels[t].y});
+				p.dir.x, p.dir.y, p.dir.z, p.kin_energy,
+			    p.origin_z});          // Dian Yu: record origin z position
+			buff.add(std::array<int, 3>{
+				data.pixels[t].x, data.pixels[t].y,
+			    p.tag_lineage});          // Dian Yu: add lineage tag, no event ID p.event_id_int
 		});
 		data.running_count[gpu_id] = running_count;
+
 
 		cudaDeviceSynchronize();
 
@@ -221,7 +228,7 @@ void worker_thread(worker_data& data,
 int main(int argc, char** argv)
 {
 	// Print version information
-	std::clog << "This is Nebula version "
+	std::clog << "This is Nebula GPU 32-bit version "
 		<< VERSION_MAJOR << "." << VERSION_MINOR << "." << VERSION_PATCH << "\n\n"
 		"Physics models:\n";
 	scatter_physics<true>::print_info(std::clog);
@@ -237,13 +244,24 @@ int main(int argc, char** argv)
 	p.add_option("batch-factor", "Multiplication factor for electron batch size", 0.9);
 	p.add_option("seed", "Random seed", 0x78c7e39b);
 	p.add_option("sort-primaries", "Sort primary electrons before simulation", false);
+	// Dian Yu: Variable phonon domain, skip all or specify one for each material
+	p.add_multi_option("phonon-domain", "Phonon scattering energy domains per material (eV)", std::string("")); 
+	// Dian Yu: for variable starting material, vacuum by default
+	p.add_option("initial-material", "Material index where primaries start (-123=vacuum, -126=detector, >=0=material)", -123);
+
 	p.parse(argc, argv);
+
 	const real energy_threshold = p.get_flag<real>("energy-threshold");
 	const uint32_t capacity = p.get_flag<uint32_t>("capacity");
 	const uint32_t prescan_size = p.get_flag<uint32_t>("prescan-size");
 	const real batch_factor = p.get_flag<real>("batch-factor");
 	const unsigned int seed = p.get_flag<unsigned int>("seed");
 	const bool sort_primaries = p.get_flag<bool>("sort-primaries");
+	// Dian Yu: fetch initial material
+	const int initial_material = p.get_flag<int>("initial-material");
+
+	// Dian Yu: Parse phonon domains, fetch as a vector
+	std::vector<real> phonon_domains = p.get_flag_vector<real>("phonon-domain");
 
 	// Setup time logging
 	time_log timer;
@@ -266,6 +284,7 @@ int main(int argc, char** argv)
 	data.max_energy = std::numeric_limits<real>::infinity();
 	data.prescan_size = prescan_size;
 	data.batch_factor = batch_factor;
+	data.initial_material = initial_material; // Dian Yu: set initial material
 
 
 	// Launch worker threads: one for each GPU
@@ -339,11 +358,19 @@ int main(int argc, char** argv)
 	for (size_t parameter_idx = 2; parameter_idx < pos_flags.size(); ++parameter_idx)
 	{
 		nbl::hdf5_file material(pos_flags[parameter_idx]);
-		data.materials.add(material);
+		
+		// Dian Yu: Get phonon domain for this material (default 200 eV if not specified)
+		size_t mat_idx = parameter_idx - 2;
+		real phonon_domain = 200.0;  // default
+		if (mat_idx < phonon_domains.size()) // && phonon_domains[mat_idx] > 0
+			phonon_domain = phonon_domains[mat_idx];
+		
+		data.materials.add(material, phonon_domain); // Dian Yu: Pass phonon domain
 
-		std::clog << "  Material " << (parameter_idx - 2) << ":\n"
-			"    Name: " << material.get_property_string("name") << "\n"
-			"    cstool version: " << material.get_property_string("cstool_version") << "\n";
+		std::clog << "  Material " << mat_idx << ":\n"
+			<< "    Name: " << material.get_property_string("name") << "\n"
+			<< "    cstool version: " << material.get_property_string("cstool_version") << "\n"
+			<< "    Phonon domain: " << phonon_domain << " eV\n"; // Dian Yu: Print phonon domain
 	}
 	timer.stop("Loading materials");
 	data.max_energy = data.materials.get_max_energy();
@@ -359,7 +386,9 @@ int main(int argc, char** argv)
 	std::clog << "Loading primary electrons..." << std::endl;
 	timer.start();
 	std::vector<particle> primaries;
+	std::vector<int2> pixels;
 	std::tie(primaries, data.pixels) = nbl::load_pri_file(pos_flags[1], data.geometry.AABB_min(), data.geometry.AABB_max(), data.materials.get_max_energy());
+
 	if (sort_primaries)
 		nbl::sort_pri_file(primaries, data.pixels);
 	nbl::prescan_shuffle(primaries, data.pixels, prescan_size);

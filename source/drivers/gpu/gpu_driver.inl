@@ -6,6 +6,13 @@ namespace kernels
 
 	__global__ void init_buffer_data(bool* buffer_data, size_t N);
 
+	//Dian Yu: for new prescan method
+	template<typename particle_manager_t>
+	__global__ void count_particles(
+		particle_manager_t particles,
+		typename particle_manager_t::particle_index_t* counts,
+		typename particle_manager_t::particle_index_t capacity);//Dian Yu: end of change
+
 	template<typename particle_manager_t>
 	__global__ void push_buffer_in(
 		particle_manager_t particles,
@@ -16,7 +23,7 @@ namespace kernels
 
 	template<typename particle_manager_t>
 	__global__ void terminate_detected(particle_manager_t particles);
-
+    
 	template<typename particle_manager_t, typename material_manager_t, typename geometry_manager_t>
 	__global__ void init(particle_manager_t particles,
 		material_manager_t materials,
@@ -42,6 +49,82 @@ namespace kernels
 		material_manager_t materials,
 		geometry_manager_t geometry,
 		util::random_generator<true>* curand_states);
+
+	//Dian Yu: for new prescan method
+	template<typename particle_manager_t>
+	__global__ void count_particles(
+		particle_manager_t particles,
+		typename particle_manager_t::particle_index_t* counts,
+		typename particle_manager_t::particle_index_t capacity)
+	{
+		const auto i = threadIdx.x + blockIdx.x * blockDim.x;
+		
+		// Use shared memory for efficient reduction within block
+		__shared__ typename particle_manager_t::particle_index_t s_running[512];
+		__shared__ typename particle_manager_t::particle_index_t s_detected[512];
+		
+		// Initialize shared memory
+		s_running[threadIdx.x] = 0;
+		s_detected[threadIdx.x] = 0;
+		
+		// Count this thread's particle
+		if (i < capacity && particles.exists(i))
+		{
+			auto status = particles.get_status(i);
+			
+			if (status != particle_manager_t::TERMINATED && 
+				status != particle_manager_t::DETECTED)
+			{
+				s_running[threadIdx.x] = 1;
+			}
+			
+			if (status == particle_manager_t::DETECTED)
+			{
+				s_detected[threadIdx.x] = 1;
+			}
+		}
+		
+		__syncthreads();
+		
+		// Parallel reduction using warp-level primitives
+		#pragma unroll
+		for (unsigned int offset = 16; offset > 0; offset >>= 1)
+		{
+			s_running[threadIdx.x] += __shfl_down_sync(0xffffffff, s_running[threadIdx.x], offset);
+			s_detected[threadIdx.x] += __shfl_down_sync(0xffffffff, s_detected[threadIdx.x], offset);
+		}
+		
+		// Write warp results to shared memory
+		if ((threadIdx.x & 31) == 0)
+		{
+			s_running[threadIdx.x >> 5] = s_running[threadIdx.x];
+			s_detected[threadIdx.x >> 5] = s_detected[threadIdx.x];
+		}
+		
+		__syncthreads();
+		
+		// Final reduction of warp results
+		if (threadIdx.x < 32)
+		{
+			typename particle_manager_t::particle_index_t run_val = 
+				(threadIdx.x < (blockDim.x + 31) / 32) ? s_running[threadIdx.x] : 0;
+			typename particle_manager_t::particle_index_t det_val = 
+				(threadIdx.x < (blockDim.x + 31) / 32) ? s_detected[threadIdx.x] : 0;
+			
+			#pragma unroll
+			for (unsigned int offset = 16; offset > 0; offset >>= 1)
+			{
+				run_val += __shfl_down_sync(0xffffffff, run_val, offset);
+				det_val += __shfl_down_sync(0xffffffff, det_val, offset);
+			}
+			
+			if (threadIdx.x == 0)
+			{
+				atomicAdd(&counts[0], run_val);
+				atomicAdd(&counts[1], det_val);
+			}
+		}
+	}//Dian Yu: end of change	
 }
 
 template<typename scatter_list_t,
@@ -54,13 +137,15 @@ CPU gpu_driver<scatter_list_t, intersect_t, geometry_manager_t>::gpu_driver(
 	material_manager_t const & materials,
 	geometry_manager_t const & geometry,
 	real min_energy, real max_energy,
-	seed_t seed
+	seed_t seed,
+	int initial_material //Dian Yu: pass initial material
 ) :
 	_min_energy(min_energy), _max_energy(max_energy),
 	_particles(particle_manager_t::create(particle_capacity)),
 	_materials(materials),
 	_geometry(geometry),
 	_intersect(intersect),
+	_initial_material(initial_material), //Dian Yu: set initial material
 	_num_blocks(1 + particle_capacity/_threads_per_block)
 {
 	/*
@@ -126,7 +211,7 @@ CPU auto gpu_driver<scatter_list_t, intersect_t, geometry_manager_t>::push(
 	particle_index_t N
 ) -> particle_index_t
 {
-	return _particles.push(particles, tags, N);
+	return _particles.push(particles, tags, N, _initial_material); //Dian Yu: pass initial material
 }
 
 template<typename scatter_list_t,
@@ -158,7 +243,16 @@ CPU auto gpu_driver<scatter_list_t, intersect_t, geometry_manager_t>::get_detect
 {
 	return _particles.get_detected_count();
 }
-
+//Dian Yu: for new prescan method:
+template<typename scatter_list_t,
+	typename intersect_t,
+	typename geometry_manager_t
+>
+CPU auto gpu_driver<scatter_list_t, intersect_t, geometry_manager_t>::get_counts() const
+-> std::pair<particle_index_t, particle_index_t>
+{
+	return _particles.get_counts();
+}//Dian Yu: end of change
 
 template<typename scatter_list_t,
 	typename intersect_t,
@@ -448,10 +542,18 @@ __global__ void kernels::init(
 		}
 
 		// Sample next scattering event
-		// TODO: case of no scattering events!
 		auto rng = curand_states[particle_idx];
 		next_scatter = this_material.sample_path(this_particle, rng);
 		curand_states[particle_idx] = rng;
+		
+		// Dian Yu: handle case of no scattering events
+		// If no scattering event is available (type == 0 and distance is invalid),
+		// the particle should propagate without scattering until it hits a boundary
+		if (next_scatter.type == 0 && next_scatter.distance < 0)
+		{
+			// Set distance to maximum extent so particle can propagate to geometry boundary
+			next_scatter.distance = geometry.get_max_extent();
+		}
 	}
 
 	// Move particle to next event, unless there is a triangle in the way
@@ -566,4 +668,73 @@ __global__ void kernels::elastic(particle_manager_t particles,
 	curand_states[particle_idx] = rng;
 }
 
+// Dian Yu: kernel for counting particles - used by gpu_particle_manager for new prescan method
+template<typename particle_manager_t>
+__global__ void gpu_count_particles(
+	particle_manager_t particles,
+	typename particle_manager_t::particle_index_t* counts,
+	typename particle_manager_t::particle_index_t capacity)
+{
+	const auto i = threadIdx.x + blockIdx.x * blockDim.x;
+	
+	__shared__ typename particle_manager_t::particle_index_t s_running[512];
+	__shared__ typename particle_manager_t::particle_index_t s_detected[512];
+	
+	s_running[threadIdx.x] = 0;
+	s_detected[threadIdx.x] = 0;
+	
+	if (i < capacity && particles.exists(i))
+	{
+		auto status = particles.get_status(i);
+		
+		// TERMINATED = 0b0011 = 3, DETECTED = 0b1010 = 10
+		if (status != 3 && status != 10)
+		{
+			s_running[threadIdx.x] = 1;
+		}
+		
+		if (status == 10)
+		{
+			s_detected[threadIdx.x] = 1;
+		}
+	}
+	
+	__syncthreads();
+	
+	#pragma unroll
+	for (unsigned int offset = 16; offset > 0; offset >>= 1)
+	{
+		s_running[threadIdx.x] += __shfl_down_sync(0xffffffff, s_running[threadIdx.x], offset);
+		s_detected[threadIdx.x] += __shfl_down_sync(0xffffffff, s_detected[threadIdx.x], offset);
+	}
+	
+	if ((threadIdx.x & 31) == 0)
+	{
+		s_running[threadIdx.x >> 5] = s_running[threadIdx.x];
+		s_detected[threadIdx.x >> 5] = s_detected[threadIdx.x];
+	}
+	
+	__syncthreads();
+	
+	if (threadIdx.x < 32)
+	{
+		typename particle_manager_t::particle_index_t run_val = 
+			(threadIdx.x < (blockDim.x + 31) / 32) ? s_running[threadIdx.x] : 0;
+		typename particle_manager_t::particle_index_t det_val = 
+			(threadIdx.x < (blockDim.x + 31) / 32) ? s_detected[threadIdx.x] : 0;
+		
+		#pragma unroll
+		for (unsigned int offset = 16; offset > 0; offset >>= 1)
+		{
+			run_val += __shfl_down_sync(0xffffffff, run_val, offset);
+			det_val += __shfl_down_sync(0xffffffff, det_val, offset);
+		}
+		
+		if (threadIdx.x == 0)
+		{
+			atomicAdd(&counts[0], run_val);
+			atomicAdd(&counts[1], det_val);
+		}
+	}
+}
 }} // namespace nbl::drivers

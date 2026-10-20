@@ -60,7 +60,8 @@ public:
 		material_manager_t const & materials,
 		geometry_manager_t const & geometry,
 		real min_energy, real max_energy,
-		seed_t seed = util::random_generator<true>::default_seed);
+		seed_t seed = util::random_generator<true>::default_seed,
+		int initial_material = -123); //Dian Yu: pass initial material with default to vacuum
 	CPU ~gpu_driver();
 
 	/**
@@ -110,6 +111,8 @@ public:
 	 * This function blocks the simulation and it is slow, so it should be avoided.
 	 */
 	CPU particle_index_t get_detected_count() const;
+
+    CPU std::pair<particle_index_t, particle_index_t> get_counts() const;  //Dian Yu: for new prescan method
 
 
 
@@ -191,6 +194,7 @@ private:
 	material_manager_t const & _materials;
 	geometry_manager_t _geometry;
 	intersect_t _intersect;
+	int _initial_material; //Dian Yu: initial material index for new primaries
 
 	// GPU run settings
 	unsigned int _threads_per_block = 32;
